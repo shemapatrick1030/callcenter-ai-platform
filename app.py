@@ -5,6 +5,7 @@ from groq import Groq
 import asyncio
 import tempfile
 import os
+from streamlit_mic_recorder import mic_recorder
 
 # ============================================
 # PAGE CONFIG
@@ -24,24 +25,6 @@ def transcribe_audio_bytes(audio_bytes, api_key):
     
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(audio_bytes)
-        tmp_path = tmp.name
-    
-    with open(tmp_path, "rb") as f:
-        transcription = client.audio.transcriptions.create(
-            model="whisper-large-v3-turbo",
-            file=("audio.wav", f.read()),
-            response_format="text"
-        )
-    
-    os.unlink(tmp_path)
-    return transcription
-
-def transcribe_audio(audio_bytes, api_key):
-    """Convert recorded audio to text using Groq Whisper"""
-    client = Groq(api_key=api_key)
-    
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp.write(audio_bytes.getvalue())
         tmp_path = tmp.name
     
     with open(tmp_path, "rb") as f:
@@ -426,9 +409,7 @@ def main():
         # ============================================
         # TAB 4: VOICE TEST
         # ============================================
-                with tab4:
-                    from streamlit_mic_recorder import mic_recorder
-            
+        with tab4:
             st.subheader("🎙️ Voice Test")
             st.markdown("Record your question and Emily will respond with her voice.")
             
@@ -511,5 +492,6 @@ def main():
                 if st.button("🗑️ Clear Voice History"):
                     st.session_state.voice_history = []
                     st.rerun()
+
 if __name__ == "__main__":
     main()
