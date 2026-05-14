@@ -426,8 +426,8 @@ def main():
         # ============================================
         # TAB 4: VOICE TEST
         # ============================================
-        with tab4:
-            from streamlit_mic_recorder import mic_recorder
+                with tab4:
+                    from streamlit_mic_recorder import mic_recorder
             
             st.subheader("🎙️ Voice Test")
             st.markdown("Record your question and Emily will respond with her voice.")
@@ -437,7 +437,6 @@ def main():
             if "voice_history" not in st.session_state:
                 st.session_state.voice_history = []
             
-            # Record audio
             audio = mic_recorder(
                 start_prompt="🎤 Click to Start Recording",
                 stop_prompt="⏹️ Stop Recording",
@@ -454,17 +453,15 @@ def main():
                 
                 st.success(f"You said: **{question}**")
                 
-                               with st.spinner("🧠 Emily is thinking..."):
+                with st.spinner("🧠 Emily is thinking..."):
                     conn = get_db()
                     knowledge = get_knowledge_text(conn, st.session_state.tenant_id)
                     
-                    # Build conversation history
                     voice_messages = []
                     for msg in st.session_state.voice_history:
                         voice_messages.append({"role": msg["role"], "content": msg["content"]})
                     voice_messages.append({"role": "user", "content": question})
                     
-                    # Build system message
                     system_message = (
                         f"You are Emily, a friendly customer support agent for {st.session_state.company_name}. "
                         "Be warm and conversational. Remember what was said earlier in the conversation. "
@@ -514,6 +511,5 @@ def main():
                 if st.button("🗑️ Clear Voice History"):
                     st.session_state.voice_history = []
                     st.rerun()
-
 if __name__ == "__main__":
     main()
