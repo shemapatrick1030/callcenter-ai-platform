@@ -454,20 +454,35 @@ def main():
                 
                 st.success(f"You said: **{question}**")
                 
-                with st.spinner("🧠 Emily is thinking..."):
+                               with st.spinner("🧠 Emily is thinking..."):
                     conn = get_db()
                     knowledge = get_knowledge_text(conn, st.session_state.tenant_id)
                     
-                    voice_history = []
+                    # Build conversation history
+                    voice_messages = []
                     for msg in st.session_state.voice_history:
-                        voice_history.append({"role": msg["role"], "content": msg["content"]})
+                        voice_messages.append({"role": msg["role"], "content": msg["content"]})
+                    voice_messages.append({"role": "user", "content": question})
                     
-                    answer = ask_ai(
-                        question,
-                        knowledge,
-                        st.session_state.company_name,
-                        chat_history=voice_history
+                    # Build system message
+                    system_message = (
+                        f"You are Emily, a friendly customer support agent for {st.session_state.company_name}. "
+                        "Be warm and conversational. Remember what was said earlier in the conversation. "
+                        "Answer using ONLY the knowledge base below. If you don't know, say you'll connect to a human agent.\n\n"
+                        f"KNOWLEDGE BASE:\n{knowledge}"
                     )
+                    
+                    full_messages = [{"role": "system", "content": system_message}]
+                    for msg in voice_messages:
+                        full_messages.append(msg)
+                    
+                    client = Groq(api_key=api_key)
+                    response = client.chat.completions.create(
+                        model="llama-3.1-8b-instant",
+                        messages=full_messages,
+                        temperature=1.0
+                    )
+                    answer = response.choices[0].message.content
                     conn.close()
                 
                 st.info(f"Emily says: **{answer}**")
