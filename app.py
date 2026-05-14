@@ -20,7 +20,7 @@ st.set_page_config(
 # ============================================
 def transcribe_audio_bytes(audio_bytes, api_key):
     """Convert recorded audio bytes to text using Groq Whisper"""
-    client = api_key=st.secrets["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"]
+    client = Groq(api_key=api_key)
     
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(audio_bytes)
@@ -38,7 +38,7 @@ def transcribe_audio_bytes(audio_bytes, api_key):
 
 def transcribe_audio(audio_bytes, api_key):
     """Convert recorded audio to text using Groq Whisper"""
-    client = api_key=st.secrets["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"]
+    client = Groq(api_key=api_key)
     
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(audio_bytes.getvalue())
@@ -137,7 +137,7 @@ def setup_database():
 # AI FUNCTION
 # ============================================
 def ask_ai(question, knowledge_base, company_name, chat_history=None):
-    client = api_key=st.secrets["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"]
+    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
     
     system_message = (
         f"You are Emily, a friendly and helpful customer support agent for {company_name}. "
@@ -426,16 +426,13 @@ def main():
         # ============================================
         # TAB 4: VOICE TEST
         # ============================================
-               # ============================================
-        # TAB 4: VOICE TEST
-        # ============================================
         with tab4:
             from streamlit_mic_recorder import mic_recorder
             
             st.subheader("🎙️ Voice Test")
             st.markdown("Record your question and Emily will respond with her voice.")
             
-            api_key = "YOUR_GROQ_API_KEY_HERE"
+            api_key = st.secrets["GROQ_API_KEY"]
             
             if "voice_history" not in st.session_state:
                 st.session_state.voice_history = []
@@ -502,5 +499,6 @@ def main():
                 if st.button("🗑️ Clear Voice History"):
                     st.session_state.voice_history = []
                     st.rerun()
+
 if __name__ == "__main__":
     main()
