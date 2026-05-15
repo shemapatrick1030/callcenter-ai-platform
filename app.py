@@ -60,6 +60,12 @@ def get_db():
 def setup_database():
     conn = get_db()
     cursor = conn.cursor()
+     # FORCE REBUILD - remove this line after first successful deploy
+    cursor.execute("DROP TABLE IF EXISTS tenants")
+    cursor.execute("DROP TABLE IF EXISTS signup_requests")
+    cursor.execute("DROP TABLE IF EXISTS knowledge_base")
+    cursor.execute("DROP TABLE IF EXISTS conversations")
+    
     
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tenants (
@@ -67,8 +73,25 @@ def setup_database():
             company_name TEXT NOT NULL,
             email TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL,
+            phone TEXT DEFAULT '',
             industry TEXT DEFAULT 'general',
+            plan TEXT DEFAULT 'trial',
             is_active INTEGER DEFAULT 1,
+            created_at TEXT
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS signup_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_name TEXT NOT NULL,
+            contact_name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            phone TEXT NOT NULL,
+            industry TEXT DEFAULT 'general',
+            plan TEXT DEFAULT 'basic',
+            message TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending',
             created_at TEXT
         )
     """)
@@ -96,16 +119,23 @@ def setup_database():
     
     cursor.execute("SELECT COUNT(*) FROM tenants")
     if cursor.fetchone()[0] == 0:
+        # Create admin account
         cursor.execute(
-            "INSERT INTO tenants (company_name, email, password, industry, created_at) VALUES (?, ?, ?, ?, ?)",
-            ("Acme Corp", "admin@acme.com", "password123", "retail", datetime.now().isoformat())
+            "INSERT INTO tenants (company_name, email, password, industry, plan, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ("Admin", "admin@callcenter.ai", "admin123", "admin", "enterprise", datetime.now().isoformat())
+        )
+        
+        # Create demo client
+        cursor.execute(
+            "INSERT INTO tenants (company_name, email, password, phone, industry, plan, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("CallCenter AI", "admin@callcenter.com", "password123", "0798507184", "rental", "trial", datetime.now().isoformat())
         )
         tenant_id = cursor.lastrowid
         
         knowledge = [
-            ("Return Policy", "30-day returns. Original packaging required. Refunds in 5-7 business days."),
-            ("Shipping", "Free shipping over $50. Standard 3-5 days. Express 1-2 days ($12.99)."),
-            ("Business Hours", "Mon-Fri 8AM-8PM. Sat 9AM-5PM. Sun closed."),
+            ("Renting Policy", "Rent our AI frontdesk assistant and callcenter handler for 30 days and the price varies according to the plan you choose. Visit our website for more."),
+            ("Payment Plan", "You pay first and we provide you with the access key to use our AI which lasts for 30 days. Upgrade before end of plan for discounts."),
+            ("Privacy Policy", "No one can access your data, not even our admins because your key is private and fully encrypted. However, should you use our product against the laws, you may face blocking and other punishments. You can read more about this in privacy policy through our website or in the contract when you have paid for the plan."),
         ]
         for topic, content in knowledge:
             cursor.execute(
@@ -138,6 +168,7 @@ def ask_ai(question, knowledge_base, company_name, chat_history=None):
         "and conversational in how you deliver information.\n\n"
         "5. Ask the name of the customer first and remember it during the whole conversation.\n\n"
         "6. You have to keep remembering the conversations within a session and use them to make sense and be more natural.\n\n"
+        "7. You are allowed to be a bit more serious when someone is clearly and intentionally messing with you.\n\n"
         f"KNOWLEDGE BASE:\n{knowledge_base}"
     )
     
@@ -191,16 +222,19 @@ def delete_knowledge(conn, knowledge_id):
 def login(email, password):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, company_name FROM tenants WHERE email = ? AND password = ?", (email, password))
+    cursor.execute("SELECT id, company_name, industry FROM tenants WHERE email = ? AND password = ? AND is_active = 1", (email, password))
     user = cursor.fetchone()
     conn.close()
-    return user
+    if user:
+        return {"id": user[0], "company_name": user[1], "is_admin": user[2] == "admin"}
+    return None
 
 def init_session():
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
         st.session_state.tenant_id = None
         st.session_state.company_name = None
+        st.session_state.is_admin = False
 
 # ============================================
 # MAIN APP
@@ -218,27 +252,29 @@ def main():
         if st.session_state.logged_in:
             st.success(f"✅ Logged in as **{st.session_state.company_name}**")
             
-            st.markdown("---")
-            st.subheader("📊 Quick Stats")
-            
-            conn = get_db()
-            cursor = conn.cursor()
-            
-            cursor.execute("SELECT COUNT(*) FROM conversations WHERE tenant_id = ?", (st.session_state.tenant_id,))
-            conv_count = cursor.fetchone()[0]
-            st.metric("Total Conversations", conv_count)
-            
-            cursor.execute("SELECT COUNT(*) FROM knowledge_base WHERE tenant_id = ?", (st.session_state.tenant_id,))
-            kb_count = cursor.fetchone()[0]
-            st.metric("Knowledge Items", kb_count)
-            
-            conn.close()
+            if not st.session_state.is_admin:
+                st.markdown("---")
+                st.subheader("📊 Quick Stats")
+                
+                conn = get_db()
+                cursor = conn.cursor()
+                
+                cursor.execute("SELECT COUNT(*) FROM conversations WHERE tenant_id = ?", (st.session_state.tenant_id,))
+                conv_count = cursor.fetchone()[0]
+                st.metric("Total Conversations", conv_count)
+                
+                cursor.execute("SELECT COUNT(*) FROM knowledge_base WHERE tenant_id = ?", (st.session_state.tenant_id,))
+                kb_count = cursor.fetchone()[0]
+                st.metric("Knowledge Items", kb_count)
+                
+                conn.close()
             
             st.markdown("---")
             if st.button("🚪 Logout", use_container_width=True):
                 st.session_state.logged_in = False
                 st.session_state.tenant_id = None
                 st.session_state.company_name = None
+                st.session_state.is_admin = False
                 st.rerun()
         else:
             st.info("👈 Log in to access your AI dashboard")
@@ -248,28 +284,207 @@ def main():
     # ============================================
     
     if not st.session_state.logged_in:
+        # PUBLIC LANDING PAGE
+        st.title("🤖 AI Call Center Agents for Your Business")
+        st.markdown("### Never miss a customer call again. Let AI handle support 24/7.")
+        
+        # Hero metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("⏰", "24/7 Availability")
+        with col2:
+            st.metric("💰", "90% Cost Savings")
+        with col3:
+            st.metric("🌍", "English + Kinyarwanda Soon")
+        
+        st.markdown("---")
+        
+        # Features
+        st.subheader("✨ What You Get")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("**🎓 Train Your AI**\nUpload your FAQs, policies, and product info. Your AI learns instantly.")
+        with col2:
+            st.markdown("**📞 Voice & Chat**\nCustomers can talk or type. AI responds naturally.")
+        with col3:
+            st.markdown("**📊 Analytics**\nSee every conversation. Know what customers ask most.")
+        
+        st.markdown("---")
+        
+        # Pricing
+        st.subheader("💎 Pricing Plans")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("### Starter\n**$99/month**\n- Up to 500 calls/month\n- 1 AI agent\n- Email support\n- English only")
+            if st.button("Get Started", key="starter"):
+                st.session_state.show_signup = True
+                st.session_state.selected_plan = "starter"
+        
+        with col2:
+            st.markdown("### Business\n**$199/month**\n- Up to 2,000 calls/month\n- 3 AI agents\n- Priority support\n- English + Analytics")
+            if st.button("Get Started", key="business"):
+                st.session_state.show_signup = True
+                st.session_state.selected_plan = "business"
+        
+        with col3:
+            st.markdown("### Enterprise\n**Custom**\n- Unlimited calls\n- Unlimited agents\n- Dedicated support\n- Kinyarwanda (coming)")
+            if st.button("Contact Us", key="enterprise"):
+                st.session_state.show_signup = True
+                st.session_state.selected_plan = "enterprise"
+        
+        st.markdown("---")
+        
+        # Signup Form
+        if "show_signup" in st.session_state and st.session_state.show_signup:
+            st.subheader(f"📝 Sign Up - {st.session_state.selected_plan.title()} Plan")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                company_name = st.text_input("Company Name*")
+                contact_name = st.text_input("Your Name*")
+            with col2:
+                email = st.text_input("Email*")
+                phone = st.text_input("Phone*")
+            
+            industry = st.selectbox("Industry", ["Retail", "Banking", "Insurance", "Healthcare", "Technology", "Hospitality", "Other"])
+            message = st.text_area("Tell us about your needs (optional)")
+            
+            if st.button("Submit Request", type="primary"):
+                if company_name and contact_name and email and phone:
+                    conn = get_db()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "INSERT INTO signup_requests (company_name, contact_name, email, phone, industry, plan, message, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                        (company_name, contact_name, email, phone, industry, st.session_state.selected_plan, message, datetime.now().isoformat())
+                    )
+                    conn.commit()
+                    conn.close()
+                    st.success("✅ Request submitted! We'll review and get back to you within 24 hours.")
+                    st.session_state.show_signup = False
+                else:
+                    st.error("Please fill in all required fields (*)")
+        
+        # Login section
+        st.markdown("---")
+        st.subheader("🔐 Already a client?")
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            st.title("🔐 Login")
-            st.markdown("Access your AI call center dashboard")
-            
-            email = st.text_input("Email", placeholder="admin@acme.com")
-            password = st.text_input("Password", type="password", placeholder="password123")
-            
-            if st.button("Login", use_container_width=True, type="primary"):
-                user = login(email, password)
+            email_login = st.text_input("Email", key="login_email", placeholder="admin@callcenter.com")
+            password_login = st.text_input("Password", type="password", key="login_password", placeholder="password123")
+            if st.button("Login", use_container_width=True):
+                user = login(email_login, password_login)
                 if user:
                     st.session_state.logged_in = True
-                    st.session_state.tenant_id = user[0]
-                    st.session_state.company_name = user[1]
+                    st.session_state.tenant_id = user["id"]
+                    st.session_state.company_name = user["company_name"]
+                    st.session_state.is_admin = user["is_admin"]
                     st.rerun()
                 else:
-                    st.error("Invalid email or password")
+                    st.error("Invalid credentials")
+        
+        st.caption("Demo: admin@callcenter.com / password123 | Admin: admin@callcenter.ai / admin123")
+    
+    elif st.session_state.is_admin:
+        # ADMIN DASHBOARD
+        st.title("🔐 Admin Dashboard")
+        
+        tab1, tab2, tab3 = st.tabs(["📋 Signup Requests", "🏢 Tenants", "📊 Analytics"])
+        
+        with tab1:
+            st.subheader("Pending Signup Requests")
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM signup_requests WHERE status = 'pending' ORDER BY created_at DESC")
+            requests = cursor.fetchall()
             
-            st.markdown("---")
-            st.caption("Demo: admin@acme.com / password123")
+            if requests:
+                for req in requests:
+                    req_id, company, contact, email, phone, industry, plan, message, status, created = req
+                    with st.container(border=True):
+                        st.markdown(f"**{company}** | {industry} | Plan: {plan.title()}")
+                        st.markdown(f"Contact: {contact} | {email} | {phone}")
+                        if message:
+                            st.caption(f"Message: {message}")
+                        st.caption(f"Submitted: {created[:16]}")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button(f"✅ Approve", key=f"approve_{req_id}"):
+                                import secrets
+                                password = secrets.token_hex(8)
+                                cursor.execute(
+                                    "INSERT INTO tenants (company_name, email, password, phone, industry, plan, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                    (company, email, password, phone, industry, plan, datetime.now().isoformat())
+                                )
+                                cursor.execute("UPDATE signup_requests SET status = 'approved' WHERE id = ?", (req_id,))
+                                conn.commit()
+                                st.success(f"Approved! Temporary password: {password}")
+                                st.rerun()
+                        with col2:
+                            if st.button(f"❌ Reject", key=f"reject_{req_id}"):
+                                cursor.execute("UPDATE signup_requests SET status = 'rejected' WHERE id = ?", (req_id,))
+                                conn.commit()
+                                st.rerun()
+            else:
+                st.info("No pending requests.")
+            conn.close()
+        
+        with tab2:
+            st.subheader("All Tenants")
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, company_name, email, phone, industry, plan, is_active, created_at FROM tenants WHERE industry != 'admin'")
+            tenants = cursor.fetchall()
+            
+            if tenants:
+                for t in tenants:
+                    t_id, name, email, phone, industry, plan, active, created = t
+                    with st.container(border=True):
+                        status = "🟢 Active" if active else "🔴 Inactive"
+                        st.markdown(f"**{name}** | {industry} | {plan.title()} | {status}")
+                        st.markdown(f"{email} | {phone} | Joined: {created[:10]}")
+                        
+                        if active:
+                            if st.button(f"🔴 Suspend", key=f"suspend_{t_id}"):
+                                cursor.execute("UPDATE tenants SET is_active = 0 WHERE id = ?", (t_id,))
+                                conn.commit()
+                                st.rerun()
+                        else:
+                            if st.button(f"🟢 Activate", key=f"activate_{t_id}"):
+                                cursor.execute("UPDATE tenants SET is_active = 1 WHERE id = ?", (t_id,))
+                                conn.commit()
+                                st.rerun()
+            else:
+                st.info("No tenants yet.")
+            conn.close()
+        
+        with tab3:
+            st.subheader("Platform Analytics")
+            conn = get_db()
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT COUNT(*) FROM tenants WHERE industry != 'admin'")
+            total_tenants = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM conversations")
+            total_conversations = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM signup_requests WHERE status = 'pending'")
+            pending = cursor.fetchone()[0]
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Clients", total_tenants)
+            with col2:
+                st.metric("Total Conversations", total_conversations)
+            with col3:
+                st.metric("Pending Requests", pending)
+            
+            conn.close()
     
     else:
+        # CLIENT DASHBOARD
         st.title(f"🏢 {st.session_state.company_name} Dashboard")
         
         tab1, tab2, tab3, tab4 = st.tabs(["💬 Test AI", "📚 Knowledge Base", "📜 History", "🎙️ Voice Test"])
