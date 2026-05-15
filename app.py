@@ -54,18 +54,19 @@ def text_to_speech(text, voice="en-US-JennyNeural"):
 # DATABASE SETUP
 # ============================================
 def get_db():
-    conn = sqlite3.connect("callcenter_web.db")
+    db_path = os.path.join(os.path.dirname(__file__), "callcenter_web.db")
+    conn = sqlite3.connect(db_path)
     return conn
 
 def setup_database():
     conn = get_db()
     cursor = conn.cursor()
-     # FORCE REBUILD - remove this line after first successful deploy
-    cursor.execute("DROP TABLE IF EXISTS tenants")
-    cursor.execute("DROP TABLE IF EXISTS signup_requests")
-    cursor.execute("DROP TABLE IF EXISTS knowledge_base")
-    cursor.execute("DROP TABLE IF EXISTS conversations")
     
+    # Drop old tables to rebuild fresh (REMOVE THESE 4 LINES AFTER FIRST SUCCESSFUL DEPLOY)
+    cursor.execute("DROP TABLE IF EXISTS conversations")
+    cursor.execute("DROP TABLE IF EXISTS knowledge_base")
+    cursor.execute("DROP TABLE IF EXISTS signup_requests")
+    cursor.execute("DROP TABLE IF EXISTS tenants")
     
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tenants (
@@ -271,10 +272,10 @@ def main():
             
             st.markdown("---")
             if st.button("🚪 Logout", use_container_width=True):
-                st.session_state.logged_in = False
-                st.session_state.tenant_id = None
-                st.session_state.company_name = None
-                st.session_state.is_admin = False
+                for key in ["logged_in", "tenant_id", "company_name", "is_admin", "chat_history", "voice_history", "show_signup", "selected_plan", "last_unanswered"]:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                init_session()
                 st.rerun()
         else:
             st.info("👈 Log in to access your AI dashboard")
@@ -336,7 +337,7 @@ def main():
         st.markdown("---")
         
         # Signup Form
-        if "show_signup" in st.session_state and st.session_state.show_signup:
+        if st.session_state.get("show_signup"):
             st.subheader(f"📝 Sign Up - {st.session_state.selected_plan.title()} Plan")
             
             col1, col2 = st.columns(2)
@@ -362,6 +363,7 @@ def main():
                     conn.close()
                     st.success("✅ Request submitted! We'll review and get back to you within 24 hours.")
                     st.session_state.show_signup = False
+                    st.rerun()
                 else:
                     st.error("Please fill in all required fields (*)")
         
@@ -529,7 +531,7 @@ def main():
                 
                 st.rerun()
             
-            if "last_unanswered" in st.session_state and st.session_state.last_unanswered:
+            if st.session_state.get("last_unanswered"):
                 st.markdown("---")
                 st.warning(f"⚠️ The AI couldn't answer: **'{st.session_state.last_unanswered}'**")
                 
