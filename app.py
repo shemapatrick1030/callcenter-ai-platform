@@ -19,11 +19,9 @@ def setup_database():
     """Create tables using Supabase SQL (runs once via REST)"""
     supabase = get_supabase()
     
-    # Check if tenants table has data
     result = supabase.table("tenants").select("id").limit(1).execute()
     
     if len(result.data) == 0:
-        # Insert admin
         supabase.table("tenants").insert({
             "company_name": "Admin",
             "email": "admin@callcenter.ai",
@@ -32,7 +30,6 @@ def setup_database():
             "plan": "enterprise"
         }).execute()
         
-        # Insert demo client
         supabase.table("tenants").insert({
             "company_name": "CallCenter AI",
             "email": "admin@callcenter.com",
@@ -42,11 +39,9 @@ def setup_database():
             "plan": "trial"
         }).execute()
         
-        # Get demo client ID
         result = supabase.table("tenants").select("id").eq("email", "admin@callcenter.com").execute()
         tenant_id = result.data[0]["id"]
         
-        # Insert knowledge
         knowledge = [
             {"tenant_id": tenant_id, "topic": "Renting Policy", "content": "Rent our AI frontdesk assistant and callcenter handler for 30 days. Price varies by plan. Visit our website for more.", "source": "manual"},
             {"tenant_id": tenant_id, "topic": "Payment Plan", "content": "You pay first and we provide you with the access key to use our AI which lasts for 30 days. Upgrade before end of plan for discounts.", "source": "manual"},
@@ -87,7 +82,7 @@ def ask_ai(question, knowledge_base, company_name, chat_history=None):
     system_message = (
         f"You are Emily, a friendly customer support agent for {company_name}. "
         "Be warm and professional. Answer using ONLY the knowledge base below. "
-        "Ask the name of the customer first "
+        "Ask the name of the customer first. "
         "If you don't know, say you'll connect to a human agent.\n\n"
         f"KNOWLEDGE BASE:\n{knowledge_base}"
     )
@@ -286,6 +281,16 @@ def main():
         
         with tab1:
             st.subheader("Pending Requests")
+            
+            # Show persistent approval message if exists
+            if st.session_state.get("approved_company"):
+                st.success(f"✅ Approved! Company: {st.session_state.approved_company} | Email: {st.session_state.approved_email} | Password: {st.session_state.approved_password}")
+                if st.button("Clear Message"):
+                    del st.session_state.approved_company
+                    del st.session_state.approved_email
+                    del st.session_state.approved_password
+                    st.rerun()
+            
             requests = get_pending_requests()
             if requests:
                 for req in requests:
@@ -295,24 +300,22 @@ def main():
                         st.caption(f"Submitted: {str(req['created_at'])[:16]}")
                         c1, c2 = st.columns(2)
                         if c1.button("✅ Approve", key=f"app_{req['id']}"):
-                           import secrets
-                           pw = secrets.token_hex(8)
-                           supabase = get_supabase()    
-                           # Insert new tenant
-                           result = supabase.table("tenants").insert({
-                               "company_name": req["company_name"],
-                               "email": req["email"],
-                               "password": pw,
-                               "phone": req["phone"],
-                               "industry": req["industry"],
-                               "plan": req["plan"]
-                           }).execute()
-                            # Mark request as approved
-                           supabase.table("signup_requests").update({"status": "approved"}).eq("id", req["id"]).execute()
-    
-                             # Show the password clearly
-                           st.success(f"✅ Approved! Login: {req['email']} | Password: {pw}")
-                           st.rerun()
+                            import secrets
+                            pw = secrets.token_hex(8)
+                            supabase = get_supabase()
+                            supabase.table("tenants").insert({
+                                "company_name": req["company_name"],
+                                "email": req["email"],
+                                "password": pw,
+                                "phone": req["phone"],
+                                "industry": req["industry"],
+                                "plan": req["plan"]
+                            }).execute()
+                            supabase.table("signup_requests").update({"status": "approved"}).eq("id", req["id"]).execute()
+                            st.session_state.approved_company = req["company_name"]
+                            st.session_state.approved_email = req["email"]
+                            st.session_state.approved_password = pw
+                            st.rerun()
                         if c2.button("❌ Reject", key=f"rej_{req['id']}"):
                             supabase = get_supabase()
                             supabase.table("signup_requests").update({"status": "rejected"}).eq("id", req["id"]).execute()
