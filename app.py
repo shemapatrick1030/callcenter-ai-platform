@@ -87,6 +87,7 @@ def ask_ai(question, knowledge_base, company_name, chat_history=None):
     system_message = (
         f"You are Emily, a friendly customer support agent for {company_name}. "
         "Be warm and professional. Answer using ONLY the knowledge base below. "
+        "Ask the name of the customer first "
         "If you don't know, say you'll connect to a human agent.\n\n"
         f"KNOWLEDGE BASE:\n{knowledge_base}"
     )
@@ -294,17 +295,24 @@ def main():
                         st.caption(f"Submitted: {str(req['created_at'])[:16]}")
                         c1, c2 = st.columns(2)
                         if c1.button("✅ Approve", key=f"app_{req['id']}"):
-                            import secrets
-                            pw = secrets.token_hex(8)
-                            supabase = get_supabase()
-                            supabase.table("tenants").insert({
-                                "company_name": req["company_name"], "email": req["email"],
-                                "password": pw, "phone": req["phone"],
-                                "industry": req["industry"], "plan": req["plan"]
-                            }).execute()
-                            supabase.table("signup_requests").update({"status": "approved"}).eq("id", req["id"]).execute()
-                            st.success(f"Approved! Password: {pw}")
-                            st.rerun()
+                           import secrets
+                           pw = secrets.token_hex(8)
+                           supabase = get_supabase()    
+                           # Insert new tenant
+                           result = supabase.table("tenants").insert({
+                               "company_name": req["company_name"],
+                               "email": req["email"],
+                               "password": pw,
+                               "phone": req["phone"],
+                               "industry": req["industry"],
+                               "plan": req["plan"]
+                           }).execute()
+                            # Mark request as approved
+                           supabase.table("signup_requests").update({"status": "approved"}).eq("id", req["id"]).execute()
+    
+                             # Show the password clearly
+                           st.success(f"✅ Approved! Login: {req['email']} | Password: {pw}")
+                           st.rerun()
                         if c2.button("❌ Reject", key=f"rej_{req['id']}"):
                             supabase = get_supabase()
                             supabase.table("signup_requests").update({"status": "rejected"}).eq("id", req["id"]).execute()
