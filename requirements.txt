@@ -2,4 +2,4 @@ streamlit
 groq
 edge-tts
 streamlit-mic-recorder
-psycopg2-binary
+supabase

@@ -4,106 +4,56 @@ from groq import Groq
 import asyncio
 import tempfile
 import os
-import psycopg2
-from psycopg2.extras import RealDictCursor
+from supabase import create_client
 from streamlit_mic_recorder import mic_recorder
 
 st.set_page_config(page_title="CallCenter AI Platform", page_icon="🤖", layout="wide")
 
 # ============================================
-# DATABASE CONNECTION
+# SUPABASE SETUP
 # ============================================
-def get_db_connection():
-    """Connect to Supabase PostgreSQL"""
-    return psycopg2.connect(
-        host=st.secrets["DB_HOST"],
-        dbname=st.secrets["DB_NAME"],
-        user=st.secrets["DB_USER"],
-        password=st.secrets["DB_PASSWORD"],
-        port=st.secrets["DB_PORT"]
-    )
+def get_supabase():
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 def setup_database():
-    """Create all tables if they don't exist"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    """Create tables using Supabase SQL (runs once via REST)"""
+    supabase = get_supabase()
     
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tenants (
-            id SERIAL PRIMARY KEY,
-            company_name TEXT NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            phone TEXT DEFAULT '',
-            industry TEXT DEFAULT 'general',
-            plan TEXT DEFAULT 'trial',
-            is_active BOOLEAN DEFAULT TRUE,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
+    # Check if tenants table has data
+    result = supabase.table("tenants").select("id").limit(1).execute()
     
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS signup_requests (
-            id SERIAL PRIMARY KEY,
-            company_name TEXT NOT NULL,
-            contact_name TEXT NOT NULL,
-            email TEXT NOT NULL,
-            phone TEXT NOT NULL,
-            industry TEXT DEFAULT 'general',
-            plan TEXT DEFAULT 'basic',
-            message TEXT DEFAULT '',
-            status TEXT DEFAULT 'pending',
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS knowledge_base (
-            id SERIAL PRIMARY KEY,
-            tenant_id INTEGER REFERENCES tenants(id),
-            topic TEXT,
-            content TEXT,
-            source TEXT DEFAULT 'manual',
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS conversations (
-            id SERIAL PRIMARY KEY,
-            tenant_id INTEGER REFERENCES tenants(id),
-            question TEXT,
-            answer TEXT,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-    
-    # Seed initial data if empty
-    cursor.execute("SELECT COUNT(*) FROM tenants")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute(
-            "INSERT INTO tenants (company_name, email, password, industry, plan) VALUES (%s, %s, %s, %s, %s)",
-            ("Admin", "admin@callcenter.ai", "admin123", "admin", "enterprise")
-        )
-        cursor.execute(
-            "INSERT INTO tenants (company_name, email, password, phone, industry, plan) VALUES (%s, %s, %s, %s, %s, %s)",
-            ("CallCenter AI", "admin@callcenter.com", "password123", "0798507184", "rental", "trial")
-        )
-        tenant_id = 2  # Second tenant
+    if len(result.data) == 0:
+        # Insert admin
+        supabase.table("tenants").insert({
+            "company_name": "Admin",
+            "email": "admin@callcenter.ai",
+            "password": "admin123",
+            "industry": "admin",
+            "plan": "enterprise"
+        }).execute()
         
+        # Insert demo client
+        supabase.table("tenants").insert({
+            "company_name": "CallCenter AI",
+            "email": "admin@callcenter.com",
+            "password": "password123",
+            "phone": "0798507184",
+            "industry": "rental",
+            "plan": "trial"
+        }).execute()
+        
+        # Get demo client ID
+        result = supabase.table("tenants").select("id").eq("email", "admin@callcenter.com").execute()
+        tenant_id = result.data[0]["id"]
+        
+        # Insert knowledge
         knowledge = [
-            ("Renting Policy", "Rent our AI frontdesk assistant and callcenter handler for 30 days. Price varies by plan. Visit our website for more."),
-            ("Payment Plan", "You pay first and we provide you with the access key to use our AI which lasts for 30 days. Upgrade before end of plan for discounts."),
-            ("Privacy Policy", "No one can access your data, not even our admins. Your key is private and fully encrypted. Misuse may result in blocking."),
+            {"tenant_id": tenant_id, "topic": "Renting Policy", "content": "Rent our AI frontdesk assistant and callcenter handler for 30 days. Price varies by plan. Visit our website for more.", "source": "manual"},
+            {"tenant_id": tenant_id, "topic": "Payment Plan", "content": "You pay first and we provide you with the access key to use our AI which lasts for 30 days. Upgrade before end of plan for discounts.", "source": "manual"},
+            {"tenant_id": tenant_id, "topic": "Privacy Policy", "content": "No one can access your data, not even our admins. Your key is private and fully encrypted. Misuse may result in blocking.", "source": "manual"},
         ]
-        for topic, content in knowledge:
-            cursor.execute(
-                "INSERT INTO knowledge_base (tenant_id, topic, content, source) VALUES (%s, %s, %s, %s)",
-                (tenant_id, topic, content, 'manual')
-            )
-    
-    conn.commit()
-    conn.close()
+        for item in knowledge:
+            supabase.table("knowledge_base").insert(item).execute()
 
 # ============================================
 # VOICE FUNCTIONS
@@ -156,102 +106,63 @@ def ask_ai(question, knowledge_base, company_name, chat_history=None):
 # DATABASE HELPERS
 # ============================================
 def login(email, password):
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    cursor.execute(
-        "SELECT id, company_name, industry FROM tenants WHERE email = %s AND password = %s AND is_active = TRUE",
-        (email, password)
-    )
-    user = cursor.fetchone()
-    conn.close()
-    if user:
+    supabase = get_supabase()
+    result = supabase.table("tenants").select("*").eq("email", email).eq("password", password).eq("is_active", True).execute()
+    if result.data:
+        user = result.data[0]
         return {"id": user["id"], "company_name": user["company_name"], "is_admin": user["industry"] == "admin"}
     return None
 
 def get_knowledge_text(tenant_id):
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT topic, content FROM knowledge_base WHERE tenant_id = %s", (tenant_id,))
-    rows = cursor.fetchall()
-    conn.close()
+    supabase = get_supabase()
+    result = supabase.table("knowledge_base").select("topic, content").eq("tenant_id", tenant_id).execute()
     text = ""
-    for row in rows:
+    for row in result.data:
         text += f"\n{row['topic']}:\n{row['content']}\n"
     return text
 
 def get_knowledge_items(tenant_id):
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT id, topic, content, source FROM knowledge_base WHERE tenant_id = %s", (tenant_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
+    supabase = get_supabase()
+    result = supabase.table("knowledge_base").select("*").eq("tenant_id", tenant_id).execute()
+    return result.data
 
 def add_knowledge(tenant_id, topic, content, source="manual"):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO knowledge_base (tenant_id, topic, content, source) VALUES (%s, %s, %s, %s)",
-        (tenant_id, topic, content, source)
-    )
-    conn.commit()
-    conn.close()
+    supabase = get_supabase()
+    supabase.table("knowledge_base").insert({
+        "tenant_id": tenant_id, "topic": topic, "content": content, "source": source
+    }).execute()
 
 def delete_knowledge(knowledge_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM knowledge_base WHERE id = %s", (knowledge_id,))
-    conn.commit()
-    conn.close()
+    supabase = get_supabase()
+    supabase.table("knowledge_base").delete().eq("id", knowledge_id).execute()
 
 def save_conversation(tenant_id, question, answer):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO conversations (tenant_id, question, answer) VALUES (%s, %s, %s)",
-        (tenant_id, question, answer)
-    )
-    conn.commit()
-    conn.close()
+    supabase = get_supabase()
+    supabase.table("conversations").insert({
+        "tenant_id": tenant_id, "question": question, "answer": answer
+    }).execute()
 
 def get_conversations(tenant_id, limit=20):
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    cursor.execute(
-        "SELECT question, answer, created_at FROM conversations WHERE tenant_id = %s ORDER BY id DESC LIMIT %s",
-        (tenant_id, limit)
-    )
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
+    supabase = get_supabase()
+    result = supabase.table("conversations").select("*").eq("tenant_id", tenant_id).order("id", desc=True).limit(limit).execute()
+    return result.data
 
 def get_pending_requests():
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT * FROM signup_requests WHERE status = 'pending' ORDER BY created_at DESC")
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
+    supabase = get_supabase()
+    result = supabase.table("signup_requests").select("*").eq("status", "pending").order("created_at", desc=True).execute()
+    return result.data
 
 def get_all_tenants():
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT * FROM tenants WHERE industry != 'admin' ORDER BY created_at DESC")
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
+    supabase = get_supabase()
+    result = supabase.table("tenants").select("*").neq("industry", "admin").order("created_at", desc=True).execute()
+    return result.data
 
 def get_analytics():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM tenants WHERE industry != 'admin'")
-    total_tenants = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM conversations")
-    total_convs = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM signup_requests WHERE status = 'pending'")
-    pending = cursor.fetchone()[0]
-    conn.close()
-    return total_tenants, total_convs, pending
+    supabase = get_supabase()
+    tenants = supabase.table("tenants").select("id", count="exact").neq("industry", "admin").execute()
+    convs = supabase.table("conversations").select("id", count="exact").execute()
+    pending = supabase.table("signup_requests").select("id", count="exact").eq("status", "pending").execute()
+    return tenants.count, convs.count, pending.count
 
 # ============================================
 # SESSION INIT
@@ -337,14 +248,12 @@ def main():
             
             if st.button("Submit Request", type="primary"):
                 if company_name and contact_name and email and phone:
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "INSERT INTO signup_requests (company_name, contact_name, email, phone, industry, plan, message) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                        (company_name, contact_name, email, phone, industry, st.session_state.selected_plan, message)
-                    )
-                    conn.commit()
-                    conn.close()
+                    supabase = get_supabase()
+                    supabase.table("signup_requests").insert({
+                        "company_name": company_name, "contact_name": contact_name,
+                        "email": email, "phone": phone, "industry": industry,
+                        "plan": st.session_state.selected_plan, "message": message
+                    }).execute()
                     st.success("✅ Submitted! We'll get back to you within 24 hours.")
                     st.session_state.show_signup = False
                     st.rerun()
@@ -387,23 +296,18 @@ def main():
                         if c1.button("✅ Approve", key=f"app_{req['id']}"):
                             import secrets
                             pw = secrets.token_hex(8)
-                            conn = get_db_connection()
-                            cursor = conn.cursor()
-                            cursor.execute(
-                                "INSERT INTO tenants (company_name, email, password, phone, industry, plan) VALUES (%s, %s, %s, %s, %s, %s)",
-                                (req["company_name"], req["email"], pw, req["phone"], req["industry"], req["plan"])
-                            )
-                            cursor.execute("UPDATE signup_requests SET status = 'approved' WHERE id = %s", (req["id"],))
-                            conn.commit()
-                            conn.close()
+                            supabase = get_supabase()
+                            supabase.table("tenants").insert({
+                                "company_name": req["company_name"], "email": req["email"],
+                                "password": pw, "phone": req["phone"],
+                                "industry": req["industry"], "plan": req["plan"]
+                            }).execute()
+                            supabase.table("signup_requests").update({"status": "approved"}).eq("id", req["id"]).execute()
                             st.success(f"Approved! Password: {pw}")
                             st.rerun()
                         if c2.button("❌ Reject", key=f"rej_{req['id']}"):
-                            conn = get_db_connection()
-                            cursor = conn.cursor()
-                            cursor.execute("UPDATE signup_requests SET status = 'rejected' WHERE id = %s", (req["id"],))
-                            conn.commit()
-                            conn.close()
+                            supabase = get_supabase()
+                            supabase.table("signup_requests").update({"status": "rejected"}).eq("id", req["id"]).execute()
                             st.rerun()
             else:
                 st.info("No pending requests.")
@@ -419,19 +323,13 @@ def main():
                         st.markdown(f"{t['email']} | {t.get('phone', 'N/A')}")
                         if t["is_active"]:
                             if st.button("🔴 Suspend", key=f"sus_{t['id']}"):
-                                conn = get_db_connection()
-                                cursor = conn.cursor()
-                                cursor.execute("UPDATE tenants SET is_active = FALSE WHERE id = %s", (t["id"],))
-                                conn.commit()
-                                conn.close()
+                                supabase = get_supabase()
+                                supabase.table("tenants").update({"is_active": False}).eq("id", t["id"]).execute()
                                 st.rerun()
                         else:
                             if st.button("🟢 Activate", key=f"act_{t['id']}"):
-                                conn = get_db_connection()
-                                cursor = conn.cursor()
-                                cursor.execute("UPDATE tenants SET is_active = TRUE WHERE id = %s", (t["id"],))
-                                conn.commit()
-                                conn.close()
+                                supabase = get_supabase()
+                                supabase.table("tenants").update({"is_active": True}).eq("id", t["id"]).execute()
                                 st.rerun()
             else:
                 st.info("No tenants yet.")
